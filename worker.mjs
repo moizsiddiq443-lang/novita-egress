@@ -193,6 +193,76 @@ async function clickSubmit(page) {
   } catch (e) { return false; }
 }
 
+async function dismissCookieModal(page) {
+  try {
+    const done = await page.evaluate(function () {
+      // remove the Cybot overlay + dialog entirely, and click "Allow all" if present
+      const overlay = document.querySelector("#CybotCookiebotDialogBodyUnderlay, .CookiebotWidget, #CybotCookiebotDialog");
+      const btns = Array.from(document.querySelectorAll("button")).filter(function (b) { return /allow all|accept all|deny|reject all/i.test(b.innerText || ""); });
+      if (btns.length) { btns[0].click(); }
+      if (overlay) { overlay.remove(); }
+      return btns.length > 0;
+    });
+    await sleep(800);
+    return done;
+  } catch (e) { return false; }
+}
+
+async function clickTermsCheckbox(page) {
+  try {
+    return await page.evaluate(function () {
+      // prefer a checkbox inside a form whose label mentions agree/terms; else any form checkbox
+      const forms = Array.from(document.querySelectorAll("form"));
+      for (const f of forms) {
+        const boxes = Array.from(f.querySelectorAll("input[type=checkbox]"));
+        for (const b of boxes) {
+          const label = (b.closest("label") ? b.closest("label").innerText : "") + " " + (f.innerText || "").slice(0, 200);
+          if (/agree|terms|privacy|accept/i.test(label)) {
+            if (!b.checked) { b.click(); return true; }
+            return true;
+          }
+        }
+        if (boxes.length) { if (!boxes[0].checked) { boxes[0].click(); } return true; }
+      }
+      // fallback: last checkbox on the page
+      const all = Array.from(document.querySelectorAll("input[type=checkbox]"));
+      if (all.length) { if (!all[all.length - 1].checked) { all[all.length - 1].click(); } return true; }
+      return false;
+    });
+  } catch (e) { return false; }
+}
+
+async function handleTurnstile(page) {
+  try {
+    await sleep(1500);
+    const has = await page.evaluate(function () {
+      return !!document.querySelector("iframe[src*='turnstile'], [id*='cf-chl-widget'], input[name='cf-turnstile-response']");
+    });
+    if (!has) { log("turnstile: none found"); return false; }
+    log("turnstile: widget present, attempting solve");
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const iframe = await page.$("iframe[src*='turnstile']");
+      if (iframe) {
+        try {
+          const fr = await iframe.contentFrame();
+          if (fr) {
+            const cb = await fr.$("input[type=checkbox], .cf-turnstile, button");
+            if (cb) { await cb.click(); log("turnstile: clicked frame element (attempt " + (attempt + 1) + ")"); }
+          }
+        } catch (e) { log("turnstile frame err: " + e.message); }
+      }
+      await sleep(2500);
+      const solved = await page.evaluate(function () {
+        const inp = document.querySelector("input[name='cf-turnstile-response'], [name='cf-turnstile-response']");
+        return inp && inp.value && inp.value.length > 20;
+      });
+      if (solved) { log("turnstile: SOLVED"); return true; }
+      log("turnstile: not solved yet (attempt " + (attempt + 1) + ")");
+    }
+    return false;
+  } catch (e) { log("turnstile err: " + e.message); return false; }
+}
+
 async function getVisibleError(page) {
   try {
     return await page.evaluate(function () {
@@ -336,32 +406,42 @@ async function runFull(isHub) {
     log("opening register page...");
     await page.goto(NOVITA + "/user/register", { waitUntil: "networkidle2", timeout: 60000 }).catch(function () { log("goto register timeout"); });
     await sleep(2000);
+    await dismissCookieModal(page);
+    log("cookie modal dismissed");
     const clicked = await clickCreateWithEmail(page);
     log("create-with-email clicked: " + clicked);
-    await sleep(1500);
-    const emailInput = await page.$("input[type=email], input[name*=email], input[placeholder*=mail]");
-    if (!emailInput) throw new Error("no email input found");
+    let emailInput = null;
+    for (let w = 0; w < 10 && !emailInput; w++) {
+      await sleep(600);
+      emailInput = await page.$("input[type=email], input[name*=email], input[placeholder*=mail]");
+    }
+    if (!emailInput) throw new Error("no email input found after create-with-email");
     await emailInput.click({ clickCount: 3 });
     await emailInput.type(email.addr, { delay: 22 });
     const pwInputs = await page.$$("input[type=password]");
     for (let i = 0; i < pwInputs.length; i++) await pwInputs[i].type(pw, { delay: 22 });
     await sleep(500);
-    await page.evaluate(function () { const c = document.querySelector("input[type=checkbox]"); if (c && !c.checked) c.click(); });
+    const termsOk = await clickTermsCheckbox(page);
+    log("terms checkbox clicked: " + termsOk);
     await sleep(400);
-    // turnstile attempt
-    const turn = await page.$("iframe[src*='turnstile']");
-    if (turn) {
-      log("turnstile iframe present -- attempting click-through");
-      try {
-        const fr = await turn.contentFrame();
-        if (fr) {
-          const cb = await fr.$("input[type=checkbox], .cf-turnstile");
-          if (cb) { await cb.click(); log("turnstile checkbox clicked"); await sleep(2500); }
-        }
-      } catch (e) { log("turnstile click err: " + e.message); }
+    const turnstileOk = await handleTurnstile(page);
+    log("turnstile solved: " + turnstileOk);
+    OUT.warnings.push(turnstileOk ? "turnstile-solved" : "turnstile-NOT-solved");
+    // submit with one retry on terms/validation error
+    let submitted = false;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      submitted = await clickSubmit(page);
+      log("submitted=" + submitted + " (attempt " + (attempt + 1) + ")");
+      await sleep(3000);
+      const err = await getVisibleError(page);
+      if (err && /agree to the terms|please agree|accept the terms/i.test(err)) {
+        log("terms error after submit -- retrying terms checkbox");
+        await clickTermsCheckbox(page);
+        await sleep(600);
+        continue;
+      }
+      break;
     }
-    const submitted = await clickSubmit(page);
-    log("submitted=" + submitted);
     let outcome = "unknown";
     let errText = null;
     for (let i = 0; i < 20; i++) {
