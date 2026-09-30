@@ -306,10 +306,26 @@ async function handleTurnstile(page) {
     });
     await sleep(500);
     // PHASE 1: wait for auto-solve (non-interactive / clean IP) -- do NOT touch it
-    for (let w = 0; w < 4; w++) {
+    for (let w = 0; w < 10; w++) {
       await sleep(2000);
       const v = await turnstileResponseValue(page);
       if (v && v.length > 20) { log("turnstile: AUTO-SOLVED"); return true; }
+    }
+    // PHASE 1b: did an interactive iframe appear during the wait?
+    const ifr1 = await page.$("iframe[src*='turnstile'], iframe[src*='challenges.cloudflare']");
+    if (ifr1) {
+      log("turnstile: iframe appeared during wait -- clicking");
+      try {
+        const box = await ifr1.boundingBox();
+        if (box) {
+          await page.mouse.move(box.x + 30, box.y + box.height - 18, { steps: 3 });
+          await sleep(200);
+          await page.mouse.click(box.x + 30, box.y + box.height - 18);
+          await sleep(3000);
+          const v = await turnstileResponseValue(page);
+          if (v && v.length > 20) { log("turnstile: SOLVED via wait-iframe"); return true; }
+        }
+      } catch (e) { log("turnstile: wait-iframe click err " + e.message); }
     }
     // PHASE 2: real-mouse click on the checkbox inside the iframe
     const iframe = await page.$("iframe[src*='turnstile']");
@@ -543,6 +559,26 @@ async function runFull(isHub) {
         await clickTermsCheckbox(page);
         await sleep(600);
         continue;
+      }
+      // after a captcha error, the invisible widget sometimes materializes an interactive iframe
+      if (err && /captcha/i.test(err)) {
+        log("captcha error -- looking for challenge iframe");
+        const v = await turnstileResponseValue(page);
+        if (!(v && v.length > 20)) {
+          const ifr = await page.$("iframe[src*='turnstile'], iframe[src*='challenges.cloudflare']");
+          if (ifr) {
+            try {
+              const box = await ifr.boundingBox();
+              if (box) {
+                await page.mouse.move(box.x + 30, box.y + box.height - 18, { steps: 3 });
+                await sleep(200);
+                await page.mouse.click(box.x + 30, box.y + box.height - 18);
+                log("turnstile: clicked challenge iframe after submit error");
+                await sleep(4000);
+              }
+            } catch (e) { log("turnstile: post-submit iframe err " + e.message); }
+          }
+        }
       }
       // check for success signals
       const state = await page.evaluate(function () {
