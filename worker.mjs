@@ -12,6 +12,7 @@ const SEED = process.argv[4] || Math.random().toString(36).slice(2, 10);
 const EMAIL_SRC = process.argv[5] || "auto";
 const ENC_KEY = process.env.ENC_KEY || "";
 const RUN_ID = process.env.GITHUB_RUN_ID || ("local-" + Date.now());
+const HEADLESS = (process.env.HEADLESS || "1") === "1";
 
 const STARTED = new Date().toISOString();
 const EMAILNATOR = "https://www.emailnator.com";
@@ -139,11 +140,12 @@ async function launch() {
   if (!exe) throw new Error("no chrome binary found on runner");
   browser = await puppeteer.launch({
     executablePath: exe,
-    headless: "new",
+    headless: HEADLESS ? "new" : false,
     ignoreDefaultArgs: ["--enable-automation"],
-    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--disable-blink-features=AutomationControlled", "--window-size=1280,900", "--lang=en-US"],
+    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--no-first-run", "--no-default-browser-check", "--disable-blink-features=AutomationControlled", "--window-size=1280,900", "--lang=en-US", "--disable-features=IsolateOrigins,site-per-process"],
     defaultViewport: { width: 1280, height: 900 }
   });
+  log("chrome launched headless=" + HEADLESS + " exe=" + exe);
   return puppeteer;
 }
 
@@ -332,6 +334,14 @@ async function handleTurnstile(page) {
       if (v2 && v2.length > 20) { log("turnstile: SOLVED after frame click"); return true; }
     }
     log("turnstile: NOT solved");
+    // diagnostic: dump iframe content snippet
+    try {
+      const fr2 = await iframe.contentFrame();
+      if (fr2) {
+        const t = await fr2.evaluate(function () { return document.body ? document.body.innerText.slice(0, 200) : ""; });
+        log("turnstile: frame text=" + t.replace(/\s+/g, " "));
+      }
+    } catch (e) {}
     return false;
   } catch (e) { log("turnstile err: " + e.message); return false; }
 }
