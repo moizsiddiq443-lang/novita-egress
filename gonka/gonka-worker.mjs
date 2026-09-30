@@ -45,7 +45,7 @@ const r = spawnSync(process.execPath, [FACTORY, "create", String(count)], {
     GONKA_QUIET: "1",
   }),
   encoding: "utf8",
-  timeout: 600000, // 10 min watchdog
+  timeout: 900000, // 10 min watchdog
 });
 log("factory exit=" + r.status + " (stdout tail: " + (r.stdout || "").split("\n").slice(-6).join(" | ").slice(0, 500) + ")");
 
