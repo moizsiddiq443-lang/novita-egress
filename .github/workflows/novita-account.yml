@@ -1,0 +1,47 @@
+name: novita-account
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [recon, full, hub]
+        default: recon
+      referral_code:
+        type: string
+        required: false
+        default: ""
+      seed:
+        type: string
+        required: false
+        default: ""
+      email_source:
+        type: choice
+        options: [auto, emailnator, mailtm]
+        default: auto
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: deps
+        run: npm init -y && npm i puppeteer-core@23 --no-fund --no-audit
+      - name: worker
+        run: node worker.mjs "${{ github.event.inputs.mode }}" "${{ github.event.inputs.referral_code }}" "${{ github.event.inputs.seed }}" "${{ github.event.inputs.email_source }}"
+        env:
+          ENC_KEY: ${{ secrets.ENC_KEY }}
+        timeout-minutes: 14
+      - name: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: result-${{ github.run_id }}
+          path: |
+            result.json.enc
+            log.txt
+            recon.png
+          if-no-files-found: warn
+          retention-days: 3
