@@ -1,0 +1,32 @@
+name: gonka-egress
+on:
+  workflow_dispatch:
+    inputs:
+      count:
+        description: accounts to create on this fresh-IP runner
+        required: false
+        default: "6"
+
+jobs:
+  egress:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: worker
+        run: node gonka/gonka-worker.mjs "${{ github.event.inputs.count }}"
+        env:
+          ENC_KEY: ${{ secrets.ENC_KEY }}
+        timeout-minutes: 18
+      - name: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: gonka-${{ github.run_id }}
+          path: |
+            result.json.enc
+            log.txt
+          if-no-files-found: warn
+          retention-days: 3
