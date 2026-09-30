@@ -3,7 +3,7 @@
 // usage: node worker.mjs <mode> <referral_code> <seed> <email_source>
 //   mode: recon | full | hub
 // Output: result.json.enc (AES-256-GCM, key = sha256(ENC_KEY env)) + log.txt (redacted).
-import { writeFileSync } from "node:fs";
+import { writeFileSync, existsSync } from "node:fs";
 import { createHash, createCipheriv, randomBytes } from "node:crypto";
 
 const MODE = process.argv[2] || "recon";
@@ -123,9 +123,8 @@ process.on("uncaughtException", function (e) { log("FATAL: " + e.message); OUT.e
 let browser = null;
 const CHROME_CANDIDATES = ["/usr/bin/google-chrome-stable", "/usr/bin/google-chrome", "/usr/bin/chromium-browser", "/usr/bin/chromium", "/snap/bin/chromium"];
 function findChrome() {
-  const fs = require("node:fs");
   for (const c of CHROME_CANDIDATES) {
-    try { if (fs.existsSync(c)) return c; } catch (e) {}
+    try { if (existsSync(c)) return c; } catch (e) {}
   }
   return null;
 }
