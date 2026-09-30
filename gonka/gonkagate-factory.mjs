@@ -54,9 +54,14 @@ const pace = async (gap, ref) => {
   const wait = gap + Math.floor(Math.random() * JITTER_MS) - (Date.now() - ref);
   if (wait > 0) await sleep(wait);
 };
-// classify an error/status as a throttle signature (429, rate limit, blocked, banned)
+// classify an error/status as a throttle signature (429, rate limit, blocked, banned,
+// or gonkagate's soft anti-abuse 404 "Application not found" — observed 2026-09-30 when
+// GH runner egress IPs collided at parallel-12: register returned 404 repeatedly).
 function isThrottle(status, text) {
-  return status === 429 || /rate|limit|too many|try again|temporar|blocked|banned|cooldown/i.test(text || "");
+  const t = text || "";
+  return status === 429
+    || status === 404 && /application not found|not found/i.test(t)
+    || /rate|limit|too many|try again|temporar|blocked|banned|cooldown/i.test(t);
 }
 
 // ---- run-log (module scope, lazy append) ----
