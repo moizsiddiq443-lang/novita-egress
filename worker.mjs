@@ -140,6 +140,7 @@ async function launch() {
   browser = await puppeteer.launch({
     executablePath: exe,
     headless: "new",
+    ignoreDefaultArgs: ["--enable-automation"],
     args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--disable-blink-features=AutomationControlled", "--window-size=1280,900", "--lang=en-US"],
     defaultViewport: { width: 1280, height: 900 }
   });
@@ -151,7 +152,14 @@ async function makePage() {
   await page.setUserAgent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36");
   await page.evaluateOnNewDocument(function () {
     Object.defineProperty(navigator, "webdriver", { get: function () { return undefined; } });
+    Object.defineProperty(Navigator.prototype, "webdriver", { get: function () { return undefined; } });
     window.chrome = window.chrome || { runtime: {} };
+    const origQuery = window.navigator.permissions && window.navigator.permissions.query;
+    if (origQuery) {
+      window.navigator.permissions.query = function (p) {
+        return (p && p.name === "notifications") ? Promise.resolve({ state: Notification.permission }) : origQuery(p);
+      };
+    }
   });
   await page.setViewport({ width: 1280, height: 900 });
   return page;
@@ -255,33 +263,75 @@ async function clickTermsCheckbox(page) {
   } catch (e) { return false; }
 }
 
+async function turnstileResponseValue(page) {
+  try {
+    return await page.evaluate(function () {
+      const inp = document.querySelector("input[name='cf-turnstile-response'], [name='cf-turnstile-response']");
+      return inp && inp.value ? inp.value : "";
+    });
+  } catch (e) { return ""; }
+}
+
 async function handleTurnstile(page) {
   try {
+    // verify engine stealth first
+    const wd = await page.evaluate(function () { return navigator.webdriver; });
+    log("turnstile: navigator.webdriver=" + wd);
     await sleep(1500);
     const has = await page.evaluate(function () {
       return !!document.querySelector("iframe[src*='turnstile'], [id*='cf-chl-widget'], input[name='cf-turnstile-response']");
     });
     if (!has) { log("turnstile: none found"); return false; }
-    log("turnstile: widget present, attempting solve");
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const iframe = await page.$("iframe[src*='turnstile']");
-      if (iframe) {
-        try {
-          const fr = await iframe.contentFrame();
-          if (fr) {
-            const cb = await fr.$("input[type=checkbox], .cf-turnstile, button");
-            if (cb) { await cb.click(); log("turnstile: clicked frame element (attempt " + (attempt + 1) + ")"); }
-          }
-        } catch (e) { log("turnstile frame err: " + e.message); }
-      }
-      await sleep(2500);
-      const solved = await page.evaluate(function () {
-        const inp = document.querySelector("input[name='cf-turnstile-response'], [name='cf-turnstile-response']");
-        return inp && inp.value && inp.value.length > 20;
-      });
-      if (solved) { log("turnstile: SOLVED"); return true; }
-      log("turnstile: not solved yet (attempt " + (attempt + 1) + ")");
+    log("turnstile: widget present");
+    // scroll widget into view (visibility helps auto-solve)
+    await page.evaluate(function () {
+      const el = document.querySelector("iframe[src*='turnstile']");
+      if (el) el.scrollIntoView({ block: "center", behavior: "instant" });
+    });
+    await sleep(500);
+    // PHASE 1: wait for auto-solve (non-interactive / clean IP) -- do NOT touch it
+    for (let w = 0; w < 4; w++) {
+      await sleep(2000);
+      const v = await turnstileResponseValue(page);
+      if (v && v.length > 20) { log("turnstile: AUTO-SOLVED"); return true; }
     }
+    // PHASE 2: real-mouse click on the checkbox inside the iframe
+    const iframe = await page.$("iframe[src*='turnstile']");
+    if (iframe) {
+      try {
+        const box = await iframe.boundingBox();
+        if (box) {
+          // the checkbox is bottom-left inside the widget (standard turnstile)
+          const cx = box.x + 22;
+          const cy = box.y + box.height - 20;
+          // human-ish movement: several steps with jitter
+          for (let s = 1; s <= 6; s++) {
+            await page.mouse.move(box.x + 60, box.y + 30, { steps: 2 });
+            await page.mouse.move(box.x + 40 + Math.random() * 20, box.y + 20 + Math.random() * 15, { steps: 2 });
+            await sleep(60 + Math.random() * 120);
+          }
+          await page.mouse.move(cx, cy, { steps: 3 });
+          await sleep(250);
+          await page.mouse.click(cx, cy);
+          log("turnstile: mouse-clicked checkbox at " + Math.round(cx) + "," + Math.round(cy));
+        }
+      } catch (e) { log("turnstile: mouse click err " + e.message); }
+      await sleep(3000);
+      const v = await turnstileResponseValue(page);
+      if (v && v.length > 20) { log("turnstile: SOLVED after mouse click"); return true; }
+      // PHASE 3: frame DOM click fallback
+      try {
+        const fr = await iframe.contentFrame();
+        if (fr) {
+          const cb = await fr.$("input[type=checkbox], .cf-turnstile, button");
+          if (cb) { await cb.click(); log("turnstile: frame-click fallback"); }
+        }
+      } catch (e) { log("turnstile: frame err " + e.message); }
+      await sleep(3000);
+      const v2 = await turnstileResponseValue(page);
+      if (v2 && v2.length > 20) { log("turnstile: SOLVED after frame click"); return true; }
+    }
+    log("turnstile: NOT solved");
     return false;
   } catch (e) { log("turnstile err: " + e.message); return false; }
 }
