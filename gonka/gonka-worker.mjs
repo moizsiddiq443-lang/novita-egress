@@ -36,7 +36,7 @@ if (existsSync(TMP_REG)) { try { rmSync(TMP_REG, { force: true }); } catch (e) {
 writeFileSync(TMP_REG, "[]", "utf8");
 log("gonka-worker: creating " + count + " accounts on fresh egress IP (encrypted output)");
 
-const r = spawnSync(process.execPath, [FACTORY, "create", String(count)], {
+const r = spawnSync(process.execPath, ["--openssl-legacy-provider", FACTORY, "create", String(count)], {
   cwd: __dir,
   env: Object.assign({}, process.env, {
     GONKAGATE_REGISTRY: TMP_REG,
