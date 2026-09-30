@@ -122,6 +122,7 @@ process.on("uncaughtException", function (e) { log("FATAL: " + e.message); OUT.e
 
 // ---------- browser layer ----------
 let browser = null;
+let CHROME_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 const CHROME_CANDIDATES = ["/usr/bin/google-chrome-stable", "/usr/bin/google-chrome", "/usr/bin/chromium-browser", "/usr/bin/chromium", "/snap/bin/chromium"];
 function findChrome() {
   for (const c of CHROME_CANDIDATES) {
@@ -146,16 +147,29 @@ async function launch() {
     defaultViewport: { width: 1280, height: 900 }
   });
   log("chrome launched headless=" + HEADLESS + " exe=" + exe);
+  // match UA to the REAL chrome version (UA mismatch is a CF flag)
+  try {
+    const v = await browser.version();
+    const m = v.match(/Chrome\/(\d+)/);
+    if (m) {
+      CHROME_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + m[1] + ".0.0.0 Safari/537.36";
+      log("chrome version: " + m[1]);
+    }
+  } catch (e) {}
   return puppeteer;
 }
 
 async function makePage() {
   const page = await browser.newPage();
-  await page.setUserAgent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36");
+  await page.setUserAgent(CHROME_UA);
   await page.evaluateOnNewDocument(function () {
     Object.defineProperty(navigator, "webdriver", { get: function () { return undefined; } });
     Object.defineProperty(Navigator.prototype, "webdriver", { get: function () { return undefined; } });
     window.chrome = window.chrome || { runtime: {} };
+    try {
+      Object.defineProperty(navigator, "plugins", { get: function () { return [1, 2, 3, 4, 5]; } });
+      Object.defineProperty(navigator, "languages", { get: function () { return ["en-US", "en"]; } });
+    } catch (e) {}
     const origQuery = window.navigator.permissions && window.navigator.permissions.query;
     if (origQuery) {
       window.navigator.permissions.query = function (p) {
@@ -513,12 +527,16 @@ async function runFull(isHub) {
     const turnstileOk = await handleTurnstile(page);
     log("turnstile solved: " + turnstileOk);
     OUT.warnings.push(turnstileOk ? "turnstile-solved" : "turnstile-NOT-solved");
-    // submit with one retry on terms/validation error
+    // submit with retries: invisible widgets often issue the token on/after submit
     let submitted = false;
-    for (let attempt = 0; attempt < 2; attempt++) {
+    let outcome = "unknown";
+    let errText = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
       submitted = await clickSubmit(page);
       log("submitted=" + submitted + " (attempt " + (attempt + 1) + ")");
-      await sleep(3000);
+      await sleep(4000);
+      const v = await turnstileResponseValue(page);
+      if (v && v.length > 20) log("turnstile: response present after submit (len " + v.length + ")");
       const err = await getVisibleError(page);
       if (err && /agree to the terms|please agree|accept the terms/i.test(err)) {
         log("terms error after submit -- retrying terms checkbox");
@@ -526,20 +544,15 @@ async function runFull(isHub) {
         await sleep(600);
         continue;
       }
-      break;
-    }
-    let outcome = "unknown";
-    let errText = null;
-    for (let i = 0; i < 20; i++) {
-      await sleep(1500);
+      // check for success signals
       const state = await page.evaluate(function () {
         return { u: location.href, b: (document.body ? document.body.innerText : "").slice(0, 300) };
       });
       if (/verify|check your email|verification/i.test(state.b)) { outcome = "awaiting-verification"; break; }
       if (/dashboard|home|overview/i.test(state.u)) { outcome = "auto-logged-in"; break; }
       if (/login/i.test(state.u)) { outcome = "needs-login"; break; }
-      const err = await getVisibleError(page);
-      if (err) { errText = err; break; }
+      if (err) { errText = err; }
+      if (attempt < 2) { log("no success signal yet -- retrying submit in 3s"); await sleep(3000); }
     }
     log("signup outcome: " + outcome + (errText ? (" | err: " + errText) : ""));
     if (errText && !/awaiting|verify/i.test(errText)) {
