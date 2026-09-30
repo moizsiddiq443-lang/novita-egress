@@ -209,9 +209,27 @@ async function dismissCookieModal(page) {
 }
 
 async function clickTermsCheckbox(page) {
+  // Novita: custom (non-native) terms checkbox -- click by text, then native fallbacks
   try {
-    return await page.evaluate(function () {
-      // prefer a checkbox inside a form whose label mentions agree/terms; else any form checkbox
+    const clickedText = await page.evaluate(function () {
+      // 1) element whose text mentions the terms agreement
+      const cands = Array.from(document.querySelectorAll("label, span, div, p")).filter(function (el) {
+        const t = (el.innerText || "").trim();
+        return /i agree to the terms|agree to the terms of service|terms of service and privacy/i.test(t) && t.length < 400;
+      });
+      for (const c of cands) {
+        // click the label or its nearest clickable ancestor (NOT a huge container)
+        let target = c;
+        if (c.tagName === "DIV" && c.children.length) {
+          const clickable = c.querySelector("label, span[role=checkbox], [role=checkbox], input[type=checkbox], a");
+          if (clickable) target = clickable;
+        }
+        try {
+          target.click();
+          return true;
+        } catch (e) {}
+      }
+      // 2) native checkbox inside any form
       const forms = Array.from(document.querySelectorAll("form"));
       for (const f of forms) {
         const boxes = Array.from(f.querySelectorAll("input[type=checkbox]"));
@@ -224,11 +242,16 @@ async function clickTermsCheckbox(page) {
         }
         if (boxes.length) { if (!boxes[0].checked) { boxes[0].click(); } return true; }
       }
-      // fallback: last checkbox on the page
+      // 3) any [role=checkbox]
+      const rc = document.querySelector("[role=checkbox]");
+      if (rc) { const t = rc.getAttribute("aria-checked"); if (t !== "true") { rc.click(); } return true; }
+      // 4) last native checkbox on page
       const all = Array.from(document.querySelectorAll("input[type=checkbox]"));
       if (all.length) { if (!all[all.length - 1].checked) { all[all.length - 1].click(); } return true; }
       return false;
     });
+    await sleep(600);
+    return clickedText;
   } catch (e) { return false; }
 }
 
@@ -408,11 +431,14 @@ async function runFull(isHub) {
     await sleep(2000);
     await dismissCookieModal(page);
     log("cookie modal dismissed");
+    // terms FIRST -- Novita gates the email form behind the agreement
+    const termsFirst = await clickTermsCheckbox(page);
+    log("terms clicked (pre): " + termsFirst);
     const clicked = await clickCreateWithEmail(page);
     log("create-with-email clicked: " + clicked);
     let emailInput = null;
-    for (let w = 0; w < 10 && !emailInput; w++) {
-      await sleep(600);
+    for (let w = 0; w < 15 && !emailInput; w++) {
+      await sleep(700);
       emailInput = await page.$("input[type=email], input[name*=email], input[placeholder*=mail]");
     }
     if (!emailInput) throw new Error("no email input found after create-with-email");
