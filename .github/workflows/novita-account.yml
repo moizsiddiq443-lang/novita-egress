@@ -30,10 +30,13 @@ jobs:
           node-version: 20
       - name: deps
         run: npm init -y && npm i puppeteer-core@23 --no-fund --no-audit
+      - name: xvfb
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq xvfb
       - name: worker
-        run: node worker.mjs "${{ github.event.inputs.mode }}" "${{ github.event.inputs.referral_code }}" "${{ github.event.inputs.seed }}" "${{ github.event.inputs.email_source }}"
+        run: xvfb-run -a node worker.mjs "${{ github.event.inputs.mode }}" "${{ github.event.inputs.referral_code }}" "${{ github.event.inputs.seed }}" "${{ github.event.inputs.email_source }}"
         env:
           ENC_KEY: ${{ secrets.ENC_KEY }}
+          HEADLESS: 0
         timeout-minutes: 14
       - name: upload
         uses: actions/upload-artifact@v4
