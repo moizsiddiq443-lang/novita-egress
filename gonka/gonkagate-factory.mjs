@@ -35,8 +35,8 @@ const JITTER_MS = 4000;         // sakana L-028: randomized jitter so pacing is 
 const HTTP_TIMEOUT_MS = 60000;  // gonka gateway is slow; <30s => false failures
 const CHAT_TIMEOUT_MS = 60000;  // inference test timeout
 const MAIL_POLL_INTERVAL_MS = 9000;
-const MAIL_POLL_TIMEOUT_MS = 180000; // 3 min max per account
-const RESEND_AFTER_MS = 90000;  // resend-verification only after 90s of polling
+const MAIL_POLL_TIMEOUT_MS = parseInt(process.env.GONKA_MAIL_TIMEOUT || "420000", 10); // 7 min max per account (env-tunable: GONKA_MAIL_TIMEOUT ms)
+const RESEND_AFTER_MS = parseInt(process.env.GONKA_RESEND_AFTER || "120000", 10); // resend after 2 min (env-tunable)
 const BONUS_POLL_INTERVAL_MS = 15000; // $10 grant is lazy (~1 min after email verify, observed)
 const BONUS_POLL_TIMEOUT_MS = 240000; // 4 min max wait for the $10 auto-grant
 // sakana L-028 doctrine: NEVER hammer a dead window. Abort the whole run after 3
@@ -312,7 +312,7 @@ async function createOne(index, opts = {}) {
   ts = Date.now();
   const vt = await waitVerifyToken(email);
   steps.mailMs = Date.now() - ts;
-  if (!vt) throw new Error(`no verification email within 3min (email=${email})`);
+  if (!vt) throw new Error(`no verification email within ${Math.round(MAIL_POLL_TIMEOUT_MS/1000/60)}min (email=${email})`);
   log(`[acct ${index}] verify token received (${vt.subject}) after ${(steps.mailMs / 1000).toFixed(1)}s`);
 
   ts = Date.now();
