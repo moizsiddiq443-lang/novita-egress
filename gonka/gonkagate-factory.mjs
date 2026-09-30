@@ -17,7 +17,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createCipheriv, createDecipheriv, publicEncrypt, privateDecrypt, constants as cryptoConst } from "node:crypto";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const AUTH_HOST = "https://gonkagate.com";
@@ -208,13 +208,67 @@ async function emailnatorRead(id) {
   const r = await f(`${EMAILNATOR}/api/message/${encodeURIComponent(id)}`);
   return r.j || {};
 }
+// livuchat (GoMeet) verify flow constants — probed 2026-09-30 from h5.gomeet.today/emailVerificationProd/js/index_new.js
+const LIVUCHAT_PUB = "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCBbVgtk5NbmuFHN6s1nguKZ+fQOcRZWODMpNRWm34kggR7TJB+Ltz4O8btRaYYnuvM/dEb3DaVRbttWfBHvC1rg/LWMx1hcD3/nocpe91o3FoxSok7FYnXav/ls6YgiUR/8KnX3jVFExWfseAkToPE7HFUZBNikNXUFo5oLE7NbwIDAQAB";
+const LIVUCHAT_PRIV = "MIICdQIBADANBgkqhkiG9w0BAQEFAASCAl8wggJbAgEAAoGBAKWu0HB/CeX+Dy10VwWzH/QISjEZN/AfYp90y/+QHHCZr5h5K5VK5VBxzvgh7Wem6zHVU8QZ56K//V8Klk/6oVKl/A0OzyGpx3wl9D3gnuKjAUe86FLgAOVASDa/OAqrQL0d5cWOmSIuHc5ZmVQpUPlbiGwdsJM/sBEm2RUhQl0ZAgMBAAECgYA8Dp4n6SThZbKCu4U/36pZfxfFrGqGdBn/ywqXXNmyR0NLdcDCoR92hYqMj1/LDsp6ieWPVASPDiD97oyF+Ue4ZAZ+oIHzjcH1NceZD8d28YmhXnyg92Dtse0I4f5Hn7s/KM/unrc7grnOvzZXRpnxFlmJfI1MhUaXDE+FNVbfcQJBAN64U1ym2/1lle7qlVpPY4MH7B2nVMy4ylGWYeCkZPKtetktMYBAwHGmFUHS9CmHpgaLcc84w8jCTN154SuuA48CQQC+cKe7YCKs4iXBIxpJAntdLUSaUYHu4XX7d6caPjItngEByfSrLxs9FBd7StpHEZ2kRd6yZfQTc8bBZC/P3KDXAkAxWRQXbl1GCxEqi82l4ftBmCrH80CFz9f8Nd7gAGzhnHCg2DOkoDRDujHxkMVKwmSWBKWl7YTr4alYVV3/6KGfAkA7+3u5NuR1E53UoVvMFy4IARQUjwuf0/+3Ps6xI1nmqFek2plnuaSYrlVfDgqGS/QdI6yrABXKcrLtgsLUc6dtAkBrOVTWS5R14/VMWf3GLCx15clKAfqMNmrje+4YwaetzW8au+pydzPhnejsInKaaDJkihznQzlKgCwCcfCXw8xf";
+const LIVUCHAT_VERIFY = "https://api.livuchat.com/api/h5/user/email/tourists/verifyEmail";
+
+function pemWrap(b64, type) {
+  const lines = b64.match(/.{1,64}/g).join("\n");
+  return "-----BEGIN " + type + " KEY-----\n" + lines + "\n-----END " + type + " KEY-----";
+}
+function desEncrypt(message, key) {
+  const c = createCipheriv("des-ecb", Buffer.from(key, "utf8"), null);
+  let enc = c.update(typeof message === "object" ? JSON.stringify(message) : message, "utf8", "base64");
+  enc += c.final("base64");
+  return enc;
+}
+function desDecrypt(ct, key) {
+  const d = createDecipheriv("des-ecb", Buffer.from(key, "utf8"), null);
+  let p = d.update(ct, "base64", "utf8");
+  p += d.final("utf8");
+  return p;
+}
+function livuchatEncrypt(data) {
+  const key = randomBytes(4).toString("base64url").slice(0, 8);
+  return { data: desEncrypt(data, key), key: publicEncrypt({ key: pemWrap(LIVUCHAT_PUB, "PUBLIC"), padding: cryptoConst.RSA_PKCS1_PADDING }, Buffer.from(key, "utf8")).toString("base64") };
+}
+function livuchatDecrypt(data) {
+  const desKey = privateDecrypt({ key: pemWrap(LIVUCHAT_PRIV, "PRIVATE"), padding: cryptoConst.RSA_PKCS1_PADDING }, Buffer.from(data.key, "base64")).toString("utf8");
+  return JSON.parse(desDecrypt(data.data.replace(/(?:\\[rn]|[\r\n]+)+/g, ""), desKey));
+}
+// verify via livuchat (GoMeet new flow). Returns {code, data} decoded.
+async function livuchatVerifyEmail(email, key) {
+  const payload = livuchatEncrypt({ appId: "90003", platform: "4", language: "en", bindType: "0", email, key });
+  const r = await f(LIVUCHAT_VERIFY, { method: "POST", headers: { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" }, body: JSON.stringify(payload) }, 30000);
+  if (r.status !== 200 && r.status !== 201) throw new Error(`livuchat verify-email failed: HTTP ${r.status} ${r.text.slice(0, 200)}`);
+  let dec;
+  try {
+    const parsed = JSON.parse(r.text);
+    if (parsed && parsed.key && parsed.data) dec = livuchatDecrypt(parsed);
+    else dec = parsed;
+  } catch { dec = null; }
+  const code = dec?.code ?? dec?.code_;
+  if (code !== undefined && code !== 200 && code !== 10507 && code !== 10502) {
+    throw new Error(`livuchat verify-email rejected: code=${code} data=${JSON.stringify(dec?.data ?? "").slice(0, 200)}`);
+  }
+  return dec;
+}
+
 function extractVerifyToken(content) {
   if (!content) return null;
   const c = String(content);
+  // GoMeet new flow: link like https://h5.gomeet.today/emailVerificationProd/gomeet_email_verify_new.html?appId=90003&platform=4&language=en&bindType=0&email=<EMAIL>&key=<UUID>
+  const gomeet = c.match(/key=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/);
+  if (gomeet) {
+    const emailM = c.match(/email=([^&"'<>\s\\]+)/);
+    return { type: "gomeet", key: gomeet[1], email: emailM ? decodeURIComponent(emailM[1]) : null, raw: gomeet[0] };
+  }
+  // GonkaGate legacy flow: verify-email?token=...
   const m = c.match(/verify-email\?token=([A-Za-z0-9_-]{20,})/) ||
             c.match(/verify-email[^"'<>\s]*token[=:]([A-Za-z0-9_-]{20,})/) ||
             c.match(/token[=:]["']?([A-Za-z0-9_-]{40,})["']?/);
-  return m ? m[1] : null;
+  return m ? { type: "gonka", token: m[1], email: null, raw: m[0] } : null;
 }
 
 // ---- step 3: poll inbox for GonkaGate verification token ----
@@ -226,10 +280,10 @@ async function waitVerifyToken(email, timeoutMs = MAIL_POLL_TIMEOUT_MS) {
     try {
       const msgs = await emailnatorMessages(email);
       const hit = msgs.find((m) => /gonkagate|confirm.*email|verify.*email/i.test(`${m.from || ""} ${m.subject || ""}`));
-      if (hit) {
+if (hit) {
         const full = await emailnatorRead(hit.id);
-        const token = extractVerifyToken(full.content || "");
-        if (token) return { token, subject: hit.subject, from: hit.from };
+        const ext = extractVerifyToken(full.content || "");
+        if (ext) return { ...ext, subject: hit.subject, from: hit.from };
       }
     } catch {}
     if (!resent && Date.now() - (deadline - timeoutMs) >= RESEND_AFTER_MS) {
@@ -243,9 +297,13 @@ async function waitVerifyToken(email, timeoutMs = MAIL_POLL_TIMEOUT_MS) {
   return null;
 }
 
-// ---- step 4: verify email ----
-async function verifyEmail(token) {
-  const r = await f(`${AUTH_HOST}/api/v1/auth/verify-email`, { method: "POST", headers: BROWSER_HEADERS, body: JSON.stringify({ token }) });
+// ---- step 4: verify email (gonka legacy OR livuchat/GoMeet new flow) ----
+async function verifyEmail(vt) {
+  if (vt?.type === "gomeet") {
+    if (!vt.key || !vt.email) throw new Error(`gomeet verify: missing key/email: ${JSON.stringify(vt)}`);
+    return await livuchatVerifyEmail(vt.email, vt.key);
+  }
+  const r = await f(`${AUTH_HOST}/api/v1/auth/verify-email`, { method: "POST", headers: BROWSER_HEADERS, body: JSON.stringify({ token: vt.token }) });
   if (r.status !== 200 && r.status !== 201) throw new Error(`verify-email failed: HTTP ${r.status} ${r.text.slice(0, 250)}`);
   return r.j;
 }
@@ -316,9 +374,9 @@ async function createOne(index, opts = {}) {
   log(`[acct ${index}] verify token received (${vt.subject}) after ${(steps.mailMs / 1000).toFixed(1)}s`);
 
   ts = Date.now();
-  await verifyEmail(vt.token);
+  await verifyEmail(vt);
   steps.verifyMs = Date.now() - ts;
-  log(`[acct ${index}] email verified (${(steps.verifyMs / 1000).toFixed(1)}s)`);
+  log(`[acct ${index}] email verified (${vt.type}) (${(steps.verifyMs / 1000).toFixed(1)}s)`);
 
   ts = Date.now();
   const jwt = await login(email, password);
