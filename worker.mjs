@@ -123,7 +123,7 @@ process.on("uncaughtException", function (e) { log("FATAL: " + e.message); OUT.e
 // ---------- browser layer ----------
 let browser = null;
 let CHROME_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
-const CHROME_CANDIDATES = ["/usr/bin/google-chrome-stable", "/usr/bin/google-chrome", "/usr/bin/chromium-browser", "/usr/bin/chromium", "/snap/bin/chromium"];
+const CHROME_CANDIDATES = ["/usr/bin/google-chrome-stable", "/usr/bin/google-chrome", "/usr/bin/chromium-browser", "/usr/bin/chromium", "/snap/bin/chromium", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "C:/Program Files/Google/Chrome/Application/chrome.exe", "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe"];
 function findChrome() {
   for (const c of CHROME_CANDIDATES) {
     try { if (existsSync(c)) return c; } catch (e) {}
