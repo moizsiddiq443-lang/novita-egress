@@ -144,11 +144,16 @@ async function mintOnce(page) {
 (async () => {
   log(`glm-mint-worker start relay=${RELAY} cycles=${CYCLES} gap=${GAP_S}s force=${FORCE} src=${SRC}`);
   const { chromium } = await import("playwright");
-  const headful = process.env.HEADFUL === "1";
-  const browser = await chromium.launch({
-    headless: !headful,
-    args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-blink-features=AutomationControlled", "--lang=en-US"],
-  });
+  // MINT_MODE: chromium (full build, new headless) | headful (xvfb) | headless (shell)
+  const mode = process.env.MINT_MODE || (process.env.HEADFUL === "1" ? "headful" : "chromium");
+  const baseArgs = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-blink-features=AutomationControlled", "--lang=en-US"];
+  const launchOpts = mode === "headful"
+    ? { headless: false, args: baseArgs }
+    : mode === "headless"
+      ? { headless: true, args: baseArgs }
+      : { headless: true, channel: "chromium", args: baseArgs };
+  log(`launch mode=${mode}`);
+  const browser = await chromium.launch(launchOpts);
   const ver = browser.version();
   const chromeVer = (ver.match(/(\d+\.\d+\.\d+\.\d+)/) || [, "131.0.0.0"])[1];
   const UA = `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVer} Safari/537.36`;
