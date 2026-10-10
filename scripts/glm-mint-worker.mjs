@@ -16,7 +16,7 @@ const GAP_S = Math.max(2, Math.min(600, Number(process.argv[3] || 10) || 10));
 const RELAY = (process.env.RELAY_URL || "").replace(/\/+$/, "");
 const TOKEN = process.env.MINT_RELAY_TOKEN || "";
 const FORCE = process.env.FORCE === "1";
-const SRC = `gh-${process.env.GITHUB_RUN_ID || "local"}-${process.env.GITHUB_RUN_ATTEMPT || "0"}`;
+const SRC = `gh-${process.env.GITHUB_RUN_ID || "local"}-${process.env.GITHUB_RUN_ATTEMPT || "0"}-${process.env.MINT_MODE || "default"}`;
 
 if (!RELAY || !TOKEN) {
   console.error("RELAY_URL and MINT_RELAY_TOKEN are required");
