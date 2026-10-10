@@ -1,0 +1,56 @@
+# GLM mint bridge — FRESH-IP captcha minting for the local glm-fleet gateway.
+# Each dispatch runs on a fresh runner IP, mints chat.z.ai captcha params with
+# playwright chromium, and pushes them to the local relay (cloudflared quick
+# tunnel -> gateway pool). Params are single-use, sub-90s freshness; a runner
+# stays alive for up to 75 minutes, serving demand on a low trickle.
+# Dispatched by the local orchestrator: node mint-bridge.mjs start
+name: glm-mint-bridge
+
+on:
+  workflow_dispatch:
+    inputs:
+      relay_url:
+        description: "relay base URL (cloudflared quick tunnel), e.g. https://xxxx.trycloudflare.com"
+        required: true
+      cycles:
+        description: "max mint cycles"
+        required: false
+        default: "120"
+      gap_s:
+        description: "seconds between mint cycles"
+        required: false
+        default: "10"
+      force:
+        description: "1 = mint regardless of relay /need"
+        required: false
+        default: ""
+
+concurrency:
+  group: glm-mint-bridge
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  mint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      RELAY_URL: ${{ github.event.inputs.relay_url }}
+      MINT_RELAY_TOKEN: ${{ secrets.MINT_RELAY_TOKEN }}
+      FORCE: ${{ github.event.inputs.force }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install Playwright + Chromium
+        run: |
+          npm init -y >/dev/null 2>&1 || true
+          npm i playwright@1.49.0 --no-save
+          npx playwright install --with-deps chromium
+      - name: Mint loop (fresh-IP params -> local relay)
+        run: node scripts/glm-mint-worker.mjs "${{ github.event.inputs.cycles }}" "${{ github.event.inputs.gap_s }}"
