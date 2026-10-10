@@ -24,6 +24,10 @@ on:
         description: "1 = mint regardless of relay /need"
         required: false
         default: ""
+      modes:
+        description: 'JSON array of launch modes to test (chromium|headful|headless)'
+        required: false
+        default: '["chromium"]'
 
 concurrency:
   group: glm-mint-bridge
@@ -36,10 +40,15 @@ jobs:
   mint:
     runs-on: ubuntu-latest
     timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: ${{ fromJSON(github.event.inputs.modes || '["chromium"]') }}
     env:
       RELAY_URL: ${{ github.event.inputs.relay_url }}
       MINT_RELAY_TOKEN: ${{ secrets.MINT_RELAY_TOKEN }}
       FORCE: ${{ github.event.inputs.force }}
+      MINT_MODE: ${{ matrix.mode }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -53,4 +62,9 @@ jobs:
           npm i playwright@1.49.0 --no-save
           npx playwright install --with-deps chromium
       - name: Mint loop (fresh-IP params -> local relay)
-        run: node scripts/glm-mint-worker.mjs "${{ github.event.inputs.cycles }}" "${{ github.event.inputs.gap_s }}"
+        run: |
+          if [ "${{ matrix.mode }}" = "headful" ]; then
+            xvfb-run -a node scripts/glm-mint-worker.mjs "${{ github.event.inputs.cycles }}" "${{ github.event.inputs.gap_s }}"
+          else
+            node scripts/glm-mint-worker.mjs "${{ github.event.inputs.cycles }}" "${{ github.event.inputs.gap_s }}"
+          fi
